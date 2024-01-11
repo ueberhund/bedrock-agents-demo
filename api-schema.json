@@ -1,0 +1,96 @@
+{
+    "openapi": "3.0.0",
+    "info": {
+        "title": "Location API",
+        "version": "1.0.0",
+        "description": "APIs for determining the weather of the location provided."
+    },
+    "paths": {
+        "/location": {
+            "get": {
+                "summary": "Returns the latitude and longitude of the location, provided as either City, State or 5-digit ZIP code",
+                "description": "Returns the latitude and longitude of the location, provided as either City, State or 5-digit ZIP code",
+                "operationId": "getLatLong",
+                "parameters": [{
+                    "name": "location",
+                    "in": "query",
+                    "description": "The location of interest",
+                    "required": true,
+                    "schema": {
+                        "type": "string"
+                    }
+                }],
+                "responses": {
+                    "200": {
+                        "description": "The latitude and longitude for the location provided",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": { 
+                                        "longitude": {
+                                            "type": "float",
+                                            "description": "The longitude of the location provided."
+                                        },
+                                        "latitude": {
+                                            "type": "float",
+                                            "description": "The latitude of the location provided."
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+
+        "/weather": {
+            "get": {
+                "summary": "Returns the weather for a specific latitude and longitude",
+                "description": "Returns the weather for a specific latitude and longitude",
+                "operationId": "getWeather",
+                "parameters": [{
+                    "name": "latitude",
+                    "in": "query",
+                    "description": "The latitude of the location",
+                    "required": true,
+                    "schema": {
+                        "type": "float"
+                   }
+                },
+                {
+                    "name": "longitude",
+                    "in": "query",
+                    "description": "The longitude of the location",
+                    "required": true,
+                    "schema": {
+                        "type": "float"
+                    }
+                }],
+                "responses": { 
+                    "200": {
+                        "description": "A paragraph description of the weather forecast",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "forecast": {
+                                            "type": "string",
+                                            "description": "A paragraph description of the weather forecast" 
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+
+
+
+    }
+}

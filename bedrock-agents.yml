@@ -1,0 +1,235 @@
+---
+AWSTemplateFormatVersion: 2010-09-09
+Description: Template to create a Bedrock agent that tells you the weather using data from NOAA
+
+Resources:
+
+#####################################################################################
+# S3 resources
+#####################################################################################
+  BucketForApiDefinition:
+    Type: AWS::S3::Bucket
+
+#####################################################################################
+# Location services resources
+#####################################################################################
+  PlaceIndex:
+    Type: AWS::Location::PlaceIndex
+    Properties:
+      DataSource: Esri
+      IndexName: !Ref AWS::StackName
+
+
+#####################################################################################
+# Lambda functions
+#####################################################################################
+  AgentLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      Code:
+        ZipFile: |
+          import boto3
+          import json
+          import os
+          import urllib.request
+          import logging
+          from botocore.exceptions import ClientError
+
+          logger = logging.getLogger()
+          logger.setLevel(logging.INFO)
+
+          def get_lat_long(event):
+            position = ""
+            # Get the agent's parameters
+            parameters = event['parameters']
+            for item in parameters:
+              if item['name'] == 'location':
+                position = item['value']
+
+            # Get the place index
+            place_index = os.environ['PLACE_INDEX']
+
+            # Search for places near the agent
+            try:
+              response = location.search_place_index_for_text(
+                IndexName=place_index,
+                Text=position
+              )
+            except ClientError as e:
+              logger.error(e)
+              raise
+
+            # Get the first place
+            place = response['Results'][0]
+
+            body = {
+                    'longitude': place['Place']['Geometry']['Point'][0],
+                    'latitude': place['Place']['Geometry']['Point'][1],
+                  }
+
+            return body
+            
+          def get_page(url):
+            request = urllib.request.urlopen(urllib.request.Request(url=url, method='GET'), timeout=5)
+            data = json.loads(request.read())
+            
+            return data
+
+          def get_weather(event):
+            #Get latitude and longitude
+            latitude, longitude = "", ""
+            
+            parameters = event['parameters']
+            for item in parameters:
+              if item['name'] == 'latitude':
+                latitude = item['value']
+              if item['name'] == 'longitude':
+                longitude = item['value']
+            
+            #Go to https://api.weather.gov/points/<lat>,<long> to get the grid for the forecast
+            url = "https://api.weather.gov/points/{},{}".format(latitude, longitude)
+            data = get_page(url)
+            forecast_url = data['properties']['forecast']
+            
+            #Now perform a forecast with the forecast_url
+            body = ""
+            forecast_data = ""
+            
+            #This request frequently fails, so retry 1x if it does
+            try: 
+              forecast_data = get_page(forecast_url)
+            except:
+              try: 
+                forecast_data = get_page(forecast_url)
+              except: 
+                forecast = '{"properties": { "periods":[{ "Forecast could not be retrieved" }] }'
+            
+            periods = forecast_data['properties']['periods']
+            for item in periods:
+              body += "{}: {} ".format(item['name'], item['detailedForecast'])
+            
+            return { "forecast": body }
+
+          # Get the service resource
+          location = boto3.client('location')
+
+          def lambda_handler(event, context):
+            logger.info('Event: {}'.format(event))
+
+            api_path = event['apiPath']
+            
+            body = ""
+            
+            if api_path == '/location':
+              body = get_lat_long(event)
+
+            if api_path == '/weather':
+              body = get_weather(event)
+
+            response_body = {
+                  'application/json': {
+                      'body': json.dumps(body)
+                  }
+              }
+                  
+            action_response = {
+                'actionGroup': event['actionGroup'],
+                'apiPath': event['apiPath'],
+                'httpMethod': event['httpMethod'],
+                'httpStatusCode': 200,
+                'responseBody': response_body
+            }
+            
+            api_response = {
+                'messageVersion': '1.0', 
+                'response': action_response}
+                
+            return api_response
+
+      Handler: index.lambda_handler
+      Runtime: python3.11
+      Timeout: 60
+      Environment:
+        Variables:
+          PLACE_INDEX: !Ref PlaceIndex
+      Role: !GetAtt AgentLambdaRole.Arn
+
+#####################################################################################
+# Permissions
+#####################################################################################
+  AgentLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: AgentLambdaPolicy
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - geo:SearchPlaceIndexForText
+                Resource:
+                  - !GetAtt PlaceIndex.Arn
+
+  AgentExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub AmazonBedrockExecutionRoleForAgents_${AWS::StackName}_${AWS::Region}
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - bedrock.amazonaws.com
+            Action:
+              - sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+              ArnLike:
+                aws:SourceArn: !Sub 'arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:*'
+      Policies:
+        - PolicyName: AgentLambdaPolicy
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                Resource: !Sub "arn:${AWS::Partition}:bedrock:${AWS::Region}::foundation-model/anthropic.claude-v2:1"
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                Resource: !Sub "${BucketForApiDefinition.Arn}/api-schema.json"
+                Condition:
+                  StringEquals:
+                    aws:ResourceAccount: !Ref AWS::AccountId
+
+  BedrockPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref AgentLambda
+      Principal: !Sub 'bedrock.${AWS::URLSuffix}'
+      SourceAccount: !Ref AWS::AccountId
+      SourceArn: !Sub 'arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:*'
+
+Outputs:
+  AgentRoleArn:
+    Value: !GetAtt AgentExecutionRole.Arn
+  BucketName:
+    Value: !Ref BucketForApiDefinition
+  LambdaArn:
+    Value: !GetAtt AgentLambda.Arn
