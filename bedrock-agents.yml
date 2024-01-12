@@ -50,6 +50,7 @@ Resources:
             place_index = os.environ['PLACE_INDEX']
 
             # Search for places near the agent
+            location = boto3.client('location')
             try:
               response = location.search_place_index_for_text(
                 IndexName=place_index,
@@ -110,8 +111,6 @@ Resources:
             
             return { "forecast": body }
 
-          # Get the service resource
-          location = boto3.client('location')
 
           def lambda_handler(event, context):
             logger.info('Event: {}'.format(event))
